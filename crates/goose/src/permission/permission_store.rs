@@ -82,7 +82,13 @@ impl ToolPermissionStore {
 
     pub fn check_permission(&self, tool_request: &ToolRequest) -> Option<bool> {
         let context_hash = self.hash_tool_context(tool_request);
-        let tool_call = tool_request.tool_call.as_ref().unwrap();
+        let tool_call = match tool_request.tool_call.as_ref() {
+            Ok(tc) => tc,
+            Err(err) => {
+                tracing::warn!(tool_request_id = %tool_request.id, error = ?err, "check_permission: tool_call parse error");
+                return None;
+            }
+        };
         let key = format!("{}:{}", tool_call.name, context_hash);
 
         self.permissions.get(&key).and_then(|records| {
@@ -101,7 +107,13 @@ impl ToolPermissionStore {
         expiry_duration: Option<Duration>,
     ) -> anyhow::Result<()> {
         let context_hash = self.hash_tool_context(tool_request);
-        let tool_call = tool_request.tool_call.as_ref().unwrap();
+        let tool_call = match tool_request.tool_call.as_ref() {
+            Ok(tc) => tc,
+            Err(err) => {
+                tracing::warn!(tool_request_id = %tool_request.id, error = ?err, "record_permission: tool_call parse error");
+                return Ok(());
+            }
+        };
         let key = format!("{}:{}", tool_call.name, context_hash);
 
         let record = ToolPermissionRecord {
@@ -124,7 +136,7 @@ impl ToolPermissionStore {
         // This helps identify when the same tool is being used in a different context
         let mut hasher = Hasher::new();
         hasher.update(
-            serde_json::to_string(&tool_request.tool_call.as_ref().unwrap().arguments)
+            serde_json::to_string(&tool_request.tool_call.as_ref().map(|tc| &tc.arguments).unwrap_or(&serde_json::Value::Null))
                 .unwrap_or_default()
                 .as_bytes(),
         );

@@ -146,12 +146,9 @@ impl AsyncTokenCounter {
                 if let Some(content_text) = content.as_text() {
                     num_tokens += self.count_tokens(content_text);
                 } else if let Some(tool_request) = content.as_tool_request() {
-                    let tool_call = tool_request.tool_call.as_ref().unwrap();
+                    // Handle tool_call which may be an error without panicking
+                    let text = tool_request.tokenizable_string();
                     // Note: separators are tokenized with adjacent tokens, keep original for accuracy
-                    let text = format!(
-                        "{}:{}:{}",
-                        tool_request.id, tool_call.name, tool_call.arguments
-                    );
                     num_tokens += self.count_tokens(&text);
                 } else if let Some(tool_response_text) = content.as_tool_response_text() {
                     num_tokens += self.count_tokens(&tool_response_text);
@@ -295,11 +292,8 @@ impl TokenCounter {
                 if let Some(content_text) = content.as_text() {
                     num_tokens += self.count_tokens(content_text);
                 } else if let Some(tool_request) = content.as_tool_request() {
-                    let tool_call = tool_request.tool_call.as_ref().unwrap();
-                    let text = format!(
-                        "{}:{}:{}",
-                        tool_request.id, tool_call.name, tool_call.arguments
-                    );
+                    // Use centralized tokenization representation
+                    let text = tool_request.tokenizable_string();
                     num_tokens += self.count_tokens(&text);
                 } else if let Some(tool_response_text) = content.as_tool_response_text() {
                     num_tokens += self.count_tokens(&tool_response_text);
@@ -693,4 +687,58 @@ mod tests {
             "Longer text should have more tokens"
         );
     }
+}
+
+#[test]
+fn test_count_chat_tokens_with_tool_call_error_sync() {
+    use rmcp::model::{ErrorCode, ErrorData};
+    use std::borrow::Cow;
+
+    let counter = TokenCounter::new();
+
+    let msg = Message::assistant().with_tool_request(
+        "call_err",
+        Err(ErrorData {
+            code: ErrorCode::INTERNAL_ERROR,
+            message: Cow::from(
+                "Could not interpret tool use parameters for id call_X: EOF".to_string(),
+            ),
+            data: None,
+        }),
+    );
+
+    let messages = vec![msg];
+
+    let count = counter.count_chat_tokens("", &messages, &[]);
+    assert!(
+        count > 0,
+        "count_chat_tokens should handle Err(tool_call) without panicking"
+    );
+}
+
+#[tokio::test]
+async fn test_count_chat_tokens_with_tool_call_error_async() {
+    use rmcp::model::{ErrorCode, ErrorData};
+    use std::borrow::Cow;
+
+    let counter = create_async_token_counter().await.unwrap();
+
+    let msg = Message::assistant().with_tool_request(
+        "call_err",
+        Err(ErrorData {
+            code: ErrorCode::INTERNAL_ERROR,
+            message: Cow::from(
+                "Could not interpret tool use parameters for id call_X: EOF".to_string(),
+            ),
+            data: None,
+        }),
+    );
+
+    let messages = vec![msg];
+
+    let count = counter.count_chat_tokens("", &messages, &[]);
+    assert!(
+        count > 0,
+        "async count_chat_tokens should handle Err(tool_call) without panicking"
+    );
 }

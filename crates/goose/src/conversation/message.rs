@@ -75,9 +75,23 @@ pub struct ToolResponse {
     pub tool_result: ToolResult<Vec<Content>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+impl ToolRequest {
+    /// Produce a stable, canonical string for tokenization. Handles Ok and Err cases.
+    pub fn tokenizable_string(&self) -> String {
+        match &self.tool_call {
+            Ok(tool_call) => format!("{}:{}:{}", self.id, tool_call.name, tool_call.arguments),
+            Err(err) => {
+                // Keep representation compact and avoid leaking big payloads.
+                // Use Debug formatting for ErrorData which includes code and message.
+                tracing::warn!(tool_request_id = %self.id, error = ?err, "ToolRequest had error when generating tokenizable string");
+                format!("{}:TOOL_CALL_ERROR:{}", self.id, err)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-#[derive(ToSchema)]
 pub struct ToolConfirmationRequest {
     pub id: String,
     pub tool_name: String,
@@ -591,7 +605,7 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
-    use crate::conversation::message::{Message, MessageContent};
+    use crate::conversation::message::{Message, MessageContent, ToolRequest};
     use crate::conversation::*;
     use mcp_core::ToolCall;
     use rmcp::model::{
@@ -644,6 +658,7 @@ mod tests {
 
         // Second item should be toolRequest
         assert_eq!(content[1]["type"], "toolRequest");
+
         assert_eq!(content[1]["id"], "tool123");
 
         // Check tool_call serialization
@@ -707,6 +722,7 @@ mod tests {
 
         assert_eq!(message.role, Role::Assistant);
         assert_eq!(message.created, 1740171566);
+
         assert_eq!(message.content.len(), 2);
 
         // Check first content item
@@ -933,3 +949,37 @@ mod tests {
         assert_eq!(message.as_concat_text(), "Hello world 世界 🌍");
     }
 }
+
+    #[test]
+    fn test_toolrequest_tokenizable_string_ok() {
+        let tool_call = Ok(mcp_core::ToolCall {
+            name: "my_tool".to_string(),
+            arguments: serde_json::json!({"a": 1}),
+        });
+        let req = ToolRequest {
+            id: "req1".to_string(),
+            tool_call: tool_call.clone(),
+        };
+
+        let s = req.tokenizable_string();
+        assert!(s.contains("req1"));
+        assert!(s.contains("my_tool"));
+        assert!(s.contains("\"a\":1") || s.contains("\"a\": 1"));
+    }
+
+    #[test]
+    fn test_toolrequest_tokenizable_string_err() {
+        let tool_call: Result<mcp_core::ToolCall, rmcp::model::ErrorData> = Err(rmcp::model::ErrorData {
+            code: rmcp::model::ErrorCode::INTERNAL_ERROR,
+            message: std::borrow::Cow::from("parse failure".to_string()),
+            data: None,
+        });
+        let req = ToolRequest {
+            id: "req_err".to_string(),
+            tool_call: tool_call.clone(),
+        };
+
+        let s = req.tokenizable_string();
+        assert!(s.starts_with("req_err:TOOL_CALL_ERROR:"));
+        assert!(s.contains("parse failure"));
+    }
